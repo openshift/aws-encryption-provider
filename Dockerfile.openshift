@@ -1,0 +1,12 @@
+FROM registry.ci.openshift.org/openshift/release:golang-1.17 as builder
+WORKDIR /go/src/sigs.k8s.io/aws-encryption-provider
+COPY . ./
+ENV GO111MODULE=on
+RUN TAG=$(git rev-parse --short HEAD) && \
+    CGO_ENABLED=0 GOOS=linux go build -mod vendor -ldflags \
+    "-w -s -X sigs.k8s.io/aws-encryption-provider/pkg/version.Version=$TAG" \
+    -o bin/aws-encryption-provider cmd/server/main.go
+
+FROM quay.io/openshift/origin-base:4.11
+COPY --from=builder /go/src/sigs.k8s.io/aws-encryption-provider/bin/aws-encryption-provider /usr/bin/aws-encryption-provider
+ENTRYPOINT ["/usr/bin/aws-encryption-provider"]
