@@ -2,4 +2,4 @@
 set -euo pipefail
 
 go mod tidy
-git diff --no-patch --exit-code
+git diff --quiet --exit-code
