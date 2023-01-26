@@ -1,11 +1,9 @@
 aliases:
   admins:
-    - sethpollack
-    - justinsb
-    - micahhausler
-    - gyuho
+    - sjenning
+    - enxebre
+    - csrwng
   maintainers:
-    - sethpollack
-    - justinsb
-    - micahhausler
-    - gyuho
+    - sjenning
+    - enxebre
+    - csrwng
