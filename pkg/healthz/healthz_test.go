@@ -3,7 +3,7 @@ package healthz
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -64,8 +64,10 @@ func TestHealthz(t *testing.T) {
 
 			c := &cloud.KMSMock{}
 			c.SetEncryptResp("test", entry.kmsEncryptErr)
-
-			p := plugin.New("test-key", c, nil)
+			sharedHealthCheck := plugin.NewSharedHealthCheck(plugin.DefaultHealthCheckPeriod, plugin.DefaultErrcBufSize)
+			go sharedHealthCheck.Start()
+			defer sharedHealthCheck.Stop()
+			p := plugin.New("test-key", c, nil, sharedHealthCheck)
 
 			ready, errc := make(chan struct{}), make(chan error)
 			s := server.New()
@@ -104,7 +106,7 @@ func TestHealthz(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer resp.Body.Close()
-			d, err := ioutil.ReadAll(resp.Body)
+			d, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Fatal(err)
 			}

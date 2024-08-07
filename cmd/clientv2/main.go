@@ -23,7 +23,7 @@ import (
 	"os"
 	"strings"
 
-	pb "k8s.io/kms/apis/v1beta1"
+	pb "k8s.io/kms/apis/v2"
 	"sigs.k8s.io/aws-encryption-provider/pkg/connection"
 )
 
@@ -47,13 +47,13 @@ func main() {
 
 	ctx := context.Background()
 
-	vReq := &pb.VersionRequest{}
-	vRes, err := client.Version(ctx, vReq)
+	vReq := &pb.StatusRequest{}
+	vRes, err := client.Status(ctx, vReq)
 	if err != nil {
 		log.Fatalf("Failed to get version: %v", err)
 	}
 
-	fmt.Println("Connected to GRPC Server", vRes.Version, vRes.RuntimeName, vRes.RuntimeVersion)
+	fmt.Println("Connected to GRPC Server", vRes.Version, vRes.Healthz, vRes.KeyId)
 
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Print("encrypt <string>\ndecrypt <string>\n")
@@ -66,23 +66,24 @@ func main() {
 
 		switch splits[0] {
 		case "encrypt":
-			eReq := &pb.EncryptRequest{Plain: []byte(splits[1])}
+			eReq := &pb.EncryptRequest{Plaintext: []byte(splits[1])}
 			res, err := client.Encrypt(ctx, eReq)
 			if err != nil {
 				log.Fatalf("Failed to encrypt: %v", err)
 			}
-			fmt.Println(base64.StdEncoding.EncodeToString(res.Cipher))
+			fmt.Println(base64.StdEncoding.EncodeToString(res.Ciphertext))
+			fmt.Println("KeyId is: ", res.KeyId)
 		case "decrypt":
 			b, err := base64.StdEncoding.DecodeString(splits[1])
 			if err != nil {
 				log.Fatalf("Failed to decode: %v", err)
 			}
-			dReq := &pb.DecryptRequest{Cipher: b}
+			dReq := &pb.DecryptRequest{Ciphertext: b}
 			res, err := client.Decrypt(ctx, dReq)
 			if err != nil {
 				log.Fatalf("Failed to encrypt: %v", err)
 			}
-			fmt.Println(string(res.Plain))
+			fmt.Println(string(res.Plaintext))
 		}
 	}
 }
