@@ -25,15 +25,17 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/kms"
 	"go.uber.org/zap"
-	pb "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/v1beta1"
+	pb "k8s.io/kms/apis/v1beta1"
 	"sigs.k8s.io/aws-encryption-provider/pkg/cloud"
+	"sigs.k8s.io/aws-encryption-provider/pkg/kmsplugin"
 )
 
 var (
-	key              = "fakekey"
-	encryptedMessage = "aGVsbG8gd29ybGQ="
-	plainMessage     = "hello world"
-	errorMessage     = fmt.Errorf("oops")
+	key                = "fakekey"
+	encryptedMessage   = "aGVsbG8gd29ybGQ="
+	encryptedMessageV2 = "1aGVsbG8gd29ybGQ="
+	plainMessage       = "hello world"
+	errorMessage       = fmt.Errorf("oops")
 )
 
 func TestEncrypt(t *testing.T) {
@@ -42,7 +44,7 @@ func TestEncrypt(t *testing.T) {
 		ctx       map[string]string
 		output    string
 		err       error
-		errType   KMSErrorType
+		errType   kmsplugin.KMSErrorType
 		healthErr bool
 		checkErr  bool
 	}{
@@ -51,7 +53,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    encryptedMessage,
 			err:       nil,
-			errType:   KMSErrorTypeNil,
+			errType:   kmsplugin.KMSErrorTypeNil,
 			healthErr: false,
 			checkErr:  false,
 		},
@@ -60,7 +62,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    "",
 			err:       errorMessage,
-			errType:   KMSErrorTypeOther,
+			errType:   kmsplugin.KMSErrorTypeOther,
 			healthErr: true,
 			checkErr:  true,
 		},
@@ -69,7 +71,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    "",
 			err:       awserr.New("RequestLimitExceeded", "test", errors.New("fail")),
-			errType:   KMSErrorTypeThrottled,
+			errType:   kmsplugin.KMSErrorTypeThrottled,
 			healthErr: true,
 			checkErr:  true,
 		},
@@ -78,7 +80,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    "",
 			err:       awserr.New(kms.ErrCodeInternalException, "test", errors.New("fail")),
-			errType:   KMSErrorTypeOther,
+			errType:   kmsplugin.KMSErrorTypeOther,
 			healthErr: true,
 			checkErr:  true,
 		},
@@ -87,7 +89,25 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    "",
 			err:       awserr.New(kms.ErrCodeLimitExceededException, "test", errors.New("fail")),
-			errType:   KMSErrorTypeThrottled,
+			errType:   kmsplugin.KMSErrorTypeThrottled,
+			healthErr: true,
+			checkErr:  true,
+		},
+		{
+			input:     plainMessage,
+			ctx:       nil,
+			output:    "",
+			err:       awserr.New("AccessDeniedException", "The ciphertext refers to a customer master key that does not exist, does not exist in this region, or you are not allowed to access", errors.New("fail")),
+			errType:   kmsplugin.KMSErrorTypeUserInduced,
+			healthErr: true,
+			checkErr:  false,
+		},
+		{
+			input:     plainMessage,
+			ctx:       nil,
+			output:    "",
+			err:       awserr.New("AccessDeniedException", "Some other error message", errors.New("fail")),
+			errType:   kmsplugin.KMSErrorTypeOther,
 			healthErr: true,
 			checkErr:  true,
 		},
@@ -96,7 +116,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    "",
 			err:       awserr.New(kms.ErrCodeDisabledException, "test", errors.New("fail")),
-			errType:   KMSErrorTypeUserInduced,
+			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
 		},
@@ -105,7 +125,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    "",
 			err:       awserr.New(kms.ErrCodeInvalidStateException, "test", errors.New("fail")),
-			errType:   KMSErrorTypeUserInduced,
+			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
 		},
@@ -114,7 +134,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    "",
 			err:       awserr.New(kms.ErrCodeInvalidGrantIdException, "test", errors.New("fail")),
-			errType:   KMSErrorTypeUserInduced,
+			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
 		},
@@ -123,7 +143,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       nil,
 			output:    "",
 			err:       awserr.New(kms.ErrCodeInvalidGrantTokenException, "test", errors.New("fail")),
-			errType:   KMSErrorTypeUserInduced,
+			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
 		},
@@ -132,7 +152,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       make(map[string]string),
 			output:    encryptedMessage,
 			err:       nil,
-			errType:   KMSErrorTypeNil,
+			errType:   kmsplugin.KMSErrorTypeNil,
 			healthErr: false,
 			checkErr:  false,
 		},
@@ -141,7 +161,7 @@ func TestEncrypt(t *testing.T) {
 			ctx:       map[string]string{"a": "b"},
 			output:    "",
 			err:       errors.New("invalid context"),
-			errType:   KMSErrorTypeOther,
+			errType:   kmsplugin.KMSErrorTypeOther,
 			healthErr: true,
 			checkErr:  true,
 		},
@@ -153,9 +173,11 @@ func TestEncrypt(t *testing.T) {
 	for idx, tc := range tt {
 		func() {
 			c.SetEncryptResp(tc.output, tc.err)
-			p := New(key, c, nil)
+			sharedHealthCheck := NewSharedHealthCheck(DefaultHealthCheckPeriod, DefaultErrcBufSize)
+			go sharedHealthCheck.Start()
+			p := New(key, c, nil, sharedHealthCheck)
 			defer func() {
-				p.stopCheckHealth()
+				sharedHealthCheck.Stop()
 			}()
 
 			eReq := &pb.EncryptRequest{Plain: []byte(tc.input)}
@@ -169,11 +191,11 @@ func TestEncrypt(t *testing.T) {
 				t.Fatalf("#%d: returned unexpected error: %v", idx, err)
 			}
 
-			if tc.err == nil && string(eRes.Cipher) != StorageVersion+tc.output {
-				t.Fatalf("#%d: expected %s, but got %s", idx, StorageVersion+tc.output, string(eRes.Cipher))
+			if tc.err == nil && string(eRes.Cipher) != kmsplugin.StorageVersion+tc.output {
+				t.Fatalf("#%d: expected %s, but got %s", idx, kmsplugin.StorageVersion+tc.output, string(eRes.Cipher))
 			}
 
-			et := ParseError(tc.err)
+			et := kmsplugin.ParseError(tc.err)
 			if !reflect.DeepEqual(tc.errType, et) {
 				t.Fatalf("#%d: expected error type %s, got %s", idx, tc.errType, et)
 			}
@@ -229,9 +251,11 @@ func TestDecrypt(t *testing.T) {
 	for _, tc := range tt {
 		func() {
 			c.SetDecryptResp(tc.output, tc.err)
-			p := New(key, c, tc.ctx)
+			sharedHealthCheck := NewSharedHealthCheck(DefaultHealthCheckPeriod, DefaultErrcBufSize)
+			go sharedHealthCheck.Start()
+			p := New(key, c, tc.ctx, sharedHealthCheck)
 			defer func() {
-				p.stopCheckHealth()
+				sharedHealthCheck.Stop()
 			}()
 
 			dReq := &pb.DecryptRequest{Cipher: []byte(tc.input)}
@@ -270,10 +294,11 @@ func TestHealth(t *testing.T) {
 	}
 	for idx, entry := range tt {
 		c := &cloud.KMSMock{}
-
-		p := New(key, c, nil)
+		sharedHealthCheck := NewSharedHealthCheck(DefaultHealthCheckPeriod, DefaultErrcBufSize)
+		go sharedHealthCheck.Start()
+		p := New(key, c, nil, sharedHealthCheck)
 		defer func() {
-			p.stopCheckHealth()
+			sharedHealthCheck.Stop()
 		}()
 
 		c.SetEncryptResp("foo", entry.encryptErr)
@@ -313,10 +338,11 @@ func TestHealthManyRequests(t *testing.T) {
 	zap.ReplaceGlobals(zap.NewExample())
 
 	c := &cloud.KMSMock{}
-
-	p := newPlugin(key, c, nil, defaultHealthCheckPeriod, 0)
+	sharedHealthCheck := NewSharedHealthCheck(DefaultHealthCheckPeriod, DefaultErrcBufSize)
+	go sharedHealthCheck.Start()
+	p := newPlugin(key, c, nil, sharedHealthCheck)
 	defer func() {
-		p.stopCheckHealth()
+		sharedHealthCheck.Stop()
 	}()
 
 	c.SetEncryptResp("foo", errors.New("fail"))

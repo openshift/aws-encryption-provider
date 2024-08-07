@@ -16,13 +16,14 @@ package integration
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"testing"
 	"time"
 
-	pb "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/v1beta1"
+	pb "k8s.io/kms/apis/v1beta1"
 	"sigs.k8s.io/aws-encryption-provider/pkg/cloud"
 	"sigs.k8s.io/aws-encryption-provider/pkg/connection"
+	"sigs.k8s.io/aws-encryption-provider/pkg/kmsplugin"
 	"sigs.k8s.io/aws-encryption-provider/pkg/plugin"
 	"sigs.k8s.io/aws-encryption-provider/pkg/server"
 )
@@ -37,9 +38,12 @@ var (
 func setup(t *testing.T) (string, *server.Server, *cloud.KMSMock, pb.KeyManagementServiceClient, func() error) {
 	s := server.New()
 	c := &cloud.KMSMock{}
-	p := plugin.New(key, c, nil)
+	sharedHealthCheck := plugin.NewSharedHealthCheck(plugin.DefaultHealthCheckPeriod, plugin.DefaultErrcBufSize)
+	go sharedHealthCheck.Start()
+	defer sharedHealthCheck.Stop()
+	p := plugin.New(key, c, nil, sharedHealthCheck)
 	p.Register(s.Server)
-	dir, err := ioutil.TempDir("", "run")
+	dir, err := os.MkdirTemp("", "run")
 	if err != nil {
 		t.Fatalf("failed to create tmp dir: %v", err)
 	}
@@ -108,8 +112,8 @@ func TestEncrypt(t *testing.T) {
 			t.Fatalf("Returned unexpected error: %v", err)
 		}
 
-		if tc.err == nil && string(eRes.Cipher) != plugin.StorageVersion+tc.output {
-			t.Fatalf("Expected %s, but got %s", plugin.StorageVersion+tc.output, string(eRes.Cipher))
+		if tc.err == nil && string(eRes.Cipher) != kmsplugin.StorageVersion+tc.output {
+			t.Fatalf("Expected %s, but got %s", kmsplugin.StorageVersion+tc.output, string(eRes.Cipher))
 		}
 	}
 

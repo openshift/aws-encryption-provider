@@ -1,6 +1,8 @@
 REPO?=gcr.io/must-override
 IMAGE?=aws-encryption-provider
 TAG?=0.0.1
+GOOS?=$(shell go env GOOS)
+GOARCH?=$(shell go env GOARCH)
 
 .PHONY: lint test build-docker build-server build-client
 
@@ -14,19 +16,20 @@ lint:
 	# hack/verify-golint.sh
 
 test:
-	go test -mod mod -v -cover -race ./...
+	hack/run-test.sh
 
 build-docker:
-	docker build \
+	docker buildx build \
+		--output=type=docker \
+		--platform=linux/$(GOARCH) \
 		-t ${REPO}/${IMAGE}:latest \
 		-t ${REPO}/${IMAGE}:${TAG} \
+		--build-arg BUILDER=$(shell hack/setup-go.sh) \
 		--build-arg TAG=${TAG} .
 
 build-server:
-	go build -mod mod -ldflags \
-			"-w -s -X sigs.k8s.io/aws-encryption-provider/pkg/version.Version=${TAG}" \
-			-o bin/aws-encryption-provider cmd/server/main.go
+	TAG=${TAG} hack/build-server.sh
 
 build-client:
-	go build -mod mod -ldflags "-w -s" -o bin/grpcclient cmd/client/main.go
+	TAG=${TAG} hack/build-client.sh
 

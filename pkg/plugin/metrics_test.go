@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
-	pb "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/v1beta1"
+	pb "k8s.io/kms/apis/v1beta1"
 	"sigs.k8s.io/aws-encryption-provider/pkg/cloud"
 	"sigs.k8s.io/aws-encryption-provider/pkg/server"
 )
@@ -34,12 +34,12 @@ func TestMetrics(t *testing.T) {
 		{
 			key:        "test-key",
 			encryptErr: errors.New("fail"),
-			expects:    `aws_encryption_provider_kms_operations_total{key_arn="test-key",operation="encrypt",status="failure"} 1`,
+			expects:    `aws_encryption_provider_kms_operations_total{key_arn="test-key",operation="encrypt",status="failure",version="v1"} 1`,
 		},
 		{
 			key:        "test-key-throttle",
 			encryptErr: awserr.New("RequestLimitExceeded", "test", errors.New("fail")),
-			expects:    `aws_encryption_provider_kms_operations_total{key_arn="test-key-throttle",operation="encrypt",status="failure-throttle"} 1`,
+			expects:    `aws_encryption_provider_kms_operations_total{key_arn="test-key-throttle",operation="encrypt",status="failure-throttle",version="v1"} 1`,
 		},
 	}
 	for i, entry := range tt {
@@ -49,8 +49,10 @@ func TestMetrics(t *testing.T) {
 
 			c := &cloud.KMSMock{}
 			c.SetEncryptResp("test", entry.encryptErr)
-
-			p := New(entry.key, c, nil)
+			sharedHealthCheck := NewSharedHealthCheck(DefaultHealthCheckPeriod, DefaultErrcBufSize)
+			go sharedHealthCheck.Start()
+			defer sharedHealthCheck.Stop()
+			p := New(entry.key, c, nil, sharedHealthCheck)
 
 			ready, errc := make(chan struct{}), make(chan error)
 			s := server.New()
@@ -97,7 +99,7 @@ func TestMetrics(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer resp.Body.Close()
-			d, err := ioutil.ReadAll(resp.Body)
+			d, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Fatal(err)
 			}
