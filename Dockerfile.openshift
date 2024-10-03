@@ -1,4 +1,4 @@
-FROM registry.ci.openshift.org/openshift/release:rhel-9-release-golang-1.21-openshift-4.16 AS builder
+FROM registry.ci.openshift.org/ocp/builder:rhel-9-golang-1.21-openshift-4.16 AS builder
 WORKDIR /go/src/sigs.k8s.io/aws-encryption-provider
 COPY . ./
 ENV GO111MODULE=on
@@ -7,7 +7,7 @@ RUN TAG=$(git rev-parse --short HEAD) && \
     "-w -s -X sigs.k8s.io/aws-encryption-provider/pkg/version.Version=$TAG" \
     -o bin/aws-encryption-provider cmd/server/main.go
 
-FROM registry.access.redhat.com/ubi9:latest
+FROM registry.ci.openshift.org/ocp/4.16:base-rhel9
 COPY --from=builder /go/src/sigs.k8s.io/aws-encryption-provider/bin/aws-encryption-provider /usr/bin/aws-encryption-provider
 ENTRYPOINT ["/usr/bin/aws-encryption-provider"]
 LABEL io.openshift.release.operator=true
