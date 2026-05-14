@@ -38,7 +38,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize client: %v", err)
 	}
-	defer conn.Close()
+	defer conn.Close() //nolint:errcheck
 
 	client := pb.NewKeyManagementServiceClient(conn)
 
@@ -60,12 +60,13 @@ func main() {
 	for {
 		fmt.Print("->")
 		text, _ := reader.ReadString('\n')
-		text = strings.Replace(text, "\n", "", -1)
+		text = strings.ReplaceAll(text, "\n", "")
 
 		splits := strings.SplitN(text, " ", 2)
 
 		switch splits[0] {
 		case "encrypt":
+
 			eReq := &pb.EncryptRequest{Plain: []byte(splits[1])}
 			res, err := client.Encrypt(ctx, eReq)
 			if err != nil {
@@ -77,6 +78,7 @@ func main() {
 			if err != nil {
 				log.Fatalf("Failed to decode: %v", err)
 			}
+
 			dReq := &pb.DecryptRequest{Cipher: b}
 			res, err := client.Decrypt(ctx, dReq)
 			if err != nil {

@@ -25,7 +25,7 @@ zssmrkdYYvn9aUhjc3XK3tjAoDpsPpeBeTBamuUKDHoH/dNRXxerZ8vu6uPR3Pgs
 `)
 
 func TestNewSessionClientWithoutEnv(t *testing.T) {
-	kmsObjet, err := New("us-west-2", "https://kms.us-west-2.amazonaws.com", 15, 5)
+	kmsObjet, err := New("us-west-2", "https://kms.us-west-2.amazonaws.com", 0, 0, 500, "")
 	assert.NoError(t, err, "Failed to create object with error (%v)", err)
 	assert.NotNil(t, kmsObjet, "Failed to create object with error (%v)", err)
 }
@@ -33,10 +33,10 @@ func TestNewSessionClientWithoutEnv(t *testing.T) {
 func TestNewSessionClientWithEnv(t *testing.T) {
 	tempFile, err := createTmpFile(TLSBundleCert)
 	assert.NoError(t, err, "Temporary file creation with CA bundle data is failing")
-	defer os.Remove(tempFile)
-	os.Setenv("AWS_CA_BUNDLE", tempFile)
-	defer os.Unsetenv("AWS_CA_BUNDLE")
-	kmsObjet, err := New("us-west-2", "https://kms.us-west-2.amazonaws.com", 15, 5)
+	defer os.Remove(tempFile)            //nolint:errcheck
+	os.Setenv("AWS_CA_BUNDLE", tempFile) //nolint:errcheck
+	defer os.Unsetenv("AWS_CA_BUNDLE")   //nolint:errcheck
+	kmsObjet, err := New("us-west-2", "https://kms.us-west-2.amazonaws.com", 0, 0, 500, "")
 	assert.NoError(t, err, "Failed to create object with error (%v)", err)
 	assert.NotNil(t, kmsObjet, "Failed to create object with error (%v)", err)
 }
@@ -52,6 +52,79 @@ func createTmpFile(b []byte) (string, error) {
 		return "", err
 	}
 
-	defer bundleFile.Close()
+	defer bundleFile.Close() //nolint:errcheck
 	return bundleFile.Name(), nil
+}
+
+func TestNewConfig(t *testing.T) {
+	tests := []struct {
+		name               string
+		region             string
+		endpoint           string
+		qps                int
+		burst              int
+		retryTokenCapacity int
+		expectErr          bool
+	}{
+		{
+			name:      "region specified",
+			region:    "us-west-2",
+			expectErr: false,
+		},
+		{
+			name:      "valid qps+burst override",
+			region:    "us-east-1",
+			qps:       1,
+			burst:     5000,
+			expectErr: false,
+		},
+		{
+			name:      "invalid qps+burst override",
+			region:    "us-east-1",
+			qps:       1,
+			burst:     -10,
+			expectErr: true,
+		},
+		{
+			name:               "specify retry token capacity",
+			region:             "us-west-2",
+			retryTokenCapacity: 5000,
+			expectErr:          false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := New(test.region, test.endpoint, test.qps, test.burst, test.retryTokenCapacity, "")
+			if test.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestNewWithSourceArn(t *testing.T) {
+	client, err := New("us-east-1", "", 0, 0, 0, "arn:aws:eks:us-east-1:123456789012:cluster/test")
+	assert.NoError(t, err)
+	assert.NotNil(t, client)
+}
+
+func TestNewWithEmptySourceArn(t *testing.T) {
+	client, err := New("us-east-1", "", 0, 0, 0, "")
+	assert.NoError(t, err)
+	assert.NotNil(t, client)
+}
+
+func TestNewWithMalformedSourceArn(t *testing.T) {
+	cfg, err := New("us-east-1", "", 0, 0, 0, "invalid-arn-format")
+	assert.Nil(t, cfg)
+	assert.Error(t, err)
+}
+
+func TestGetSourceAccount(t *testing.T) {
+	account, err := getSourceAccount("arn:aws:eks:us-east-1:123456789012:cluster/test")
+	assert.NoError(t, err)
+	assert.Equal(t, "123456789012", account)
 }

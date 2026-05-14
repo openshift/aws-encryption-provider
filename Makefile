@@ -11,9 +11,8 @@ lint:
 	hack/verify-mod-tidy.sh
 	echo "Verifying gofmt"
 	hack/verify-gofmt.sh
-	# TODO: (cewong) Figure out how to install lint tool in base builder image
-	# echo "Verifying linting"
-	# hack/verify-golint.sh
+	echo "Verifying linting"
+	hack/verify-golint.sh
 
 test:
 	hack/run-test.sh

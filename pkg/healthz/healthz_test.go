@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/kms"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"go.uber.org/zap"
 	"sigs.k8s.io/aws-encryption-provider/pkg/cloud"
 	"sigs.k8s.io/aws-encryption-provider/pkg/plugin"
@@ -42,25 +42,30 @@ func TestHealthz(t *testing.T) {
 
 		{
 			path:          "/test-healthz-fail-with-internal-error",
-			kmsEncryptErr: awserr.New(kms.ErrCodeInternalException, "test", errors.New("fail")),
+			kmsEncryptErr: &kmstypes.KMSInternalException{Message: aws.String("test")},
 			shouldSucceed: false,
 		},
 		// user-induced errors should still fail "/healthz"
 		{
 			path:          "/test-healthz-fail-with-user-induced-invalid-key-state",
-			kmsEncryptErr: awserr.New(kms.ErrCodeInvalidStateException, "test", errors.New("fail")),
+			kmsEncryptErr: &kmstypes.KMSInvalidStateException{Message: aws.String("test")},
 			shouldSucceed: false,
 		},
 		{
 			path:          "/test-healthz-fail-with-user-induced-invalid-grant",
-			kmsEncryptErr: awserr.New(kms.ErrCodeInvalidGrantTokenException, "test", errors.New("fail")),
+			kmsEncryptErr: &kmstypes.InvalidGrantTokenException{Message: aws.String("test")},
+			shouldSucceed: false,
+		},
+		{
+			path:          "/test-healthz-fail-with-user-induced-throttled",
+			kmsEncryptErr: &kmstypes.LimitExceededException{Message: aws.String("test")},
 			shouldSucceed: false,
 		},
 	}
 	for i, entry := range tt {
 		t.Run(entry.path, func(t *testing.T) {
 			addr := filepath.Join(os.TempDir(), fmt.Sprintf("healthz%x", rand.Int63()))
-			defer os.RemoveAll(addr)
+			defer os.RemoveAll(addr) //nolint:errcheck
 
 			c := &cloud.KMSMock{}
 			c.SetEncryptResp("test", entry.kmsEncryptErr)
@@ -73,7 +78,7 @@ func TestHealthz(t *testing.T) {
 			s := server.New()
 			p.Register(s.Server)
 			defer func() {
-				s.Server.Stop()
+				s.Stop()
 				if err := <-errc; err != nil {
 					t.Fatalf("#%d: unexpected gRPC server stop error %v", i, err)
 				}
@@ -91,7 +96,7 @@ func TestHealthz(t *testing.T) {
 				t.Fatal("took too long to start gRPC server")
 			}
 
-			hd := NewHandler(p)
+			hd := NewHandler([]*plugin.V1Plugin{p}, []*plugin.V2Plugin{})
 
 			mux := http.NewServeMux()
 			mux.Handle(entry.path, hd)
@@ -105,7 +110,7 @@ func TestHealthz(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer resp.Body.Close()
+			defer resp.Body.Close() //nolint:errcheck
 			d, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Fatal(err)

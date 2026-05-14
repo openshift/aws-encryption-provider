@@ -14,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 	pb "k8s.io/kms/apis/v1beta1"
@@ -38,14 +39,14 @@ func TestMetrics(t *testing.T) {
 		},
 		{
 			key:        "test-key-throttle",
-			encryptErr: awserr.New("RequestLimitExceeded", "test", errors.New("fail")),
+			encryptErr: &kmstypes.LimitExceededException{Message: aws.String("test")},
 			expects:    `aws_encryption_provider_kms_operations_total{key_arn="test-key-throttle",operation="encrypt",status="failure-throttle",version="v1"} 1`,
 		},
 	}
 	for i, entry := range tt {
 		t.Run(entry.key, func(t *testing.T) {
 			addr := filepath.Join(os.TempDir(), fmt.Sprintf("metrics%x", rand.Int63()))
-			defer os.RemoveAll(addr)
+			defer os.RemoveAll(addr) //nolint:errcheck
 
 			c := &cloud.KMSMock{}
 			c.SetEncryptResp("test", entry.encryptErr)
@@ -58,7 +59,7 @@ func TestMetrics(t *testing.T) {
 			s := server.New()
 			p.Register(s.Server)
 			defer func() {
-				s.Server.Stop()
+				s.Stop()
 				if err := <-errc; err != nil {
 					t.Fatalf("unexpected gRPC server stop error %v", err)
 				}
@@ -98,7 +99,7 @@ func TestMetrics(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer resp.Body.Close()
+			defer resp.Body.Close() //nolint:errcheck
 			d, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Fatal(err)
