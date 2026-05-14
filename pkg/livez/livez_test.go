@@ -1,6 +1,7 @@
 package livez
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/kms"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"go.uber.org/zap"
 	"sigs.k8s.io/aws-encryption-provider/pkg/cloud"
 	"sigs.k8s.io/aws-encryption-provider/pkg/plugin"
@@ -25,42 +26,71 @@ func TestLivez(t *testing.T) {
 	zap.ReplaceGlobals(zap.NewExample())
 
 	tt := []struct {
-		path          string
-		kmsEncryptErr error
-		shouldSucceed bool
+		path           string
+		kmsEncryptErr  error
+		shouldSucceed  bool
+		healthCheckErr error
 	}{
 		{
-			path:          "/test-livez-default",
-			kmsEncryptErr: nil,
-			shouldSucceed: true,
+			path:           "/test-livez-default",
+			kmsEncryptErr:  nil,
+			healthCheckErr: nil,
+			shouldSucceed:  true,
 		},
 		{
-			path:          "/test-livez-fail",
-			kmsEncryptErr: errors.New("fail encrypt"),
-			shouldSucceed: false,
+			path:           "/test-livez-fail",
+			kmsEncryptErr:  errors.New("fail encrypt"),
+			healthCheckErr: nil,
+			shouldSucceed:  false,
 		},
 		{
-			path:          "/test-livez-fail-with-internal-error",
-			kmsEncryptErr: awserr.New(kms.ErrCodeInternalException, "test", errors.New("fail")),
-			shouldSucceed: false,
+			path:           "/test-livez-fail-with-internal-error",
+			kmsEncryptErr:  &kmstypes.KMSInternalException{Message: aws.String("test")},
+			healthCheckErr: nil,
+			shouldSucceed:  false,
+		},
+		{
+			path:           "/test-livez-fail-with-internal-error-cached",
+			kmsEncryptErr:  nil,
+			healthCheckErr: &kmstypes.KMSInternalException{Message: aws.String("test")},
+			shouldSucceed:  false,
 		},
 
 		// user-induced
 		{
-			path:          "/test-livez-fail-with-user-induced-invalid-key-state",
-			kmsEncryptErr: awserr.New(kms.ErrCodeInvalidStateException, "test", errors.New("fail")),
-			shouldSucceed: true,
+			path:           "/test-livez-fail-with-user-induced-invalid-key-state",
+			kmsEncryptErr:  &kmstypes.KMSInvalidStateException{Message: aws.String("test")},
+			healthCheckErr: nil,
+			shouldSucceed:  true,
 		},
 		{
-			path:          "/test-livez-fail-with-user-induced-invalid-grant",
-			kmsEncryptErr: awserr.New(kms.ErrCodeInvalidGrantTokenException, "test", errors.New("fail")),
+			path:           "/test-livez-fail-with-user-induced-invalid-grant",
+			kmsEncryptErr:  &kmstypes.InvalidGrantTokenException{Message: aws.String("test")},
+			healthCheckErr: nil,
+			shouldSucceed:  true,
+		},
+		{
+			path:           "/test-livez-fail-with-context-cancelled",
+			kmsEncryptErr:  context.Canceled,
+			healthCheckErr: nil,
+			shouldSucceed:  true,
+		},
+		{
+			path:           "/test-livez-fail-with-context-cancelled-cached",
+			kmsEncryptErr:  nil,
+			healthCheckErr: context.Canceled,
+			shouldSucceed:  true,
+		},
+		{
+			path:          "/test-livez-fail-with-user-induced-throttled",
+			kmsEncryptErr: &kmstypes.LimitExceededException{Message: aws.String("test")},
 			shouldSucceed: true,
 		},
 	}
 	for i, entry := range tt {
 		t.Run(entry.path, func(t *testing.T) {
 			addr := filepath.Join(os.TempDir(), fmt.Sprintf("livez%x", rand.Int63()))
-			defer os.RemoveAll(addr)
+			defer os.RemoveAll(addr) //nolint:errcheck
 
 			c := &cloud.KMSMock{}
 			c.SetEncryptResp("test", entry.kmsEncryptErr)
@@ -73,7 +103,7 @@ func TestLivez(t *testing.T) {
 			s := server.New()
 			p.Register(s.Server)
 			defer func() {
-				s.Server.Stop()
+				s.Stop()
 				if err := <-errc; err != nil {
 					t.Fatalf("#%d: unexpected gRPC server stop error %v", i, err)
 				}
@@ -91,7 +121,7 @@ func TestLivez(t *testing.T) {
 				t.Fatal("took too long to start gRPC server")
 			}
 
-			hd := NewHandler(p)
+			hd := NewHandler([]*plugin.V1Plugin{p}, []*plugin.V2Plugin{})
 
 			mux := http.NewServeMux()
 			mux.Handle(entry.path, hd)
@@ -99,13 +129,16 @@ func TestLivez(t *testing.T) {
 			ts := httptest.NewServer(mux)
 			defer ts.Close()
 
+			if entry.healthCheckErr != nil {
+				sharedHealthCheck.RecordErr(entry.healthCheckErr)
+			}
 			u := ts.URL + entry.path
 
 			resp, err := http.Get(u)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer resp.Body.Close()
+			defer resp.Body.Close() //nolint:errcheck
 			d, err := io.ReadAll(resp.Body)
 			if err != nil {
 				t.Fatal(err)

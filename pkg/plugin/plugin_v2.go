@@ -15,15 +15,16 @@ package plugin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/kms"
-	"github.com/aws/aws-sdk-go/service/kms/kmsiface"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	pb "k8s.io/kms/apis/v2"
+	"sigs.k8s.io/aws-encryption-provider/pkg/cloud"
 	"sigs.k8s.io/aws-encryption-provider/pkg/kmsplugin"
 )
 
@@ -35,14 +36,15 @@ const (
 
 // Plugin implements the KeyManagementServiceServer
 type V2Plugin struct {
-	svc           kmsiface.KMSAPI
+	pb.UnimplementedKeyManagementServiceServer
+	svc           cloud.AWSKMSv2
 	keyID         string
-	encryptionCtx map[string]*string
+	encryptionCtx map[string]string
 	healthCheck   *SharedHealthCheck
 }
 
 // New returns a new *V2Plugin
-func NewV2(key string, svc kmsiface.KMSAPI, encryptionCtx map[string]string, healthCheck *SharedHealthCheck) *V2Plugin {
+func NewV2(key string, svc cloud.AWSKMSv2, encryptionCtx map[string]string, healthCheck *SharedHealthCheck) *V2Plugin {
 	return newPluginV2(
 		key,
 		svc,
@@ -53,7 +55,7 @@ func NewV2(key string, svc kmsiface.KMSAPI, encryptionCtx map[string]string, hea
 
 func newPluginV2(
 	key string,
-	svc kmsiface.KMSAPI,
+	svc cloud.AWSKMSv2,
 	encryptionCtx map[string]string,
 	healthCheck *SharedHealthCheck,
 ) *V2Plugin {
@@ -63,10 +65,10 @@ func newPluginV2(
 		healthCheck: healthCheck,
 	}
 	if len(encryptionCtx) > 0 {
-		p.encryptionCtx = make(map[string]*string)
+		p.encryptionCtx = make(map[string]string)
 	}
 	for k, v := range encryptionCtx {
-		p.encryptionCtx[k] = aws.String(v)
+		p.encryptionCtx[k] = v
 	}
 	return p
 }
@@ -89,10 +91,18 @@ func newPluginV2(
 func (p *V2Plugin) Health() error {
 	recent, err := p.healthCheck.isRecentlyChecked()
 	if !recent {
-		_, err = p.Encrypt(context.Background(), &pb.EncryptRequest{Plaintext: []byte("foo")})
-		p.healthCheck.recordErr(err)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		encResult, err := p.Encrypt(ctx, &pb.EncryptRequest{Plaintext: []byte("foo")})
+		p.healthCheck.RecordErr(err)
 		if err != nil {
-			zap.L().Warn("health check failed", zap.Error(err))
+			zap.L().Warn("health check failed at encryption", zap.Error(err))
+			return err
+		}
+		_, err = p.Decrypt(ctx, &pb.DecryptRequest{Ciphertext: encResult.Ciphertext})
+		p.healthCheck.RecordErr(err)
+		if err != nil {
+			zap.L().Warn("health check failed at decryption", zap.Error(err))
 		}
 		return err
 	}
@@ -104,9 +114,15 @@ func (p *V2Plugin) Health() error {
 	return err
 }
 
+// Live checks the liveness of KMS API.
+// If the error is user-induced (e.g., revoke CMK) or throttled, the function returns NO error.
+// If the error is due to KMS availability, the function returns the error.
 func (p *V2Plugin) Live() error {
-	if err := p.Health(); err != nil && kmsplugin.ParseError(err) != kmsplugin.KMSErrorTypeUserInduced {
-		return err
+	if err := p.Health(); err != nil {
+		errType := kmsplugin.ParseError(err)
+		if errType != kmsplugin.KMSErrorTypeUserInduced && errType != kmsplugin.KMSErrorTypeThrottled {
+			return err
+		}
 	}
 	return nil
 }
@@ -138,14 +154,15 @@ func (p *V2Plugin) Encrypt(ctx context.Context, request *pb.EncryptRequest) (*pb
 		input.EncryptionContext = p.encryptionCtx
 	}
 
-	result, err := p.svc.Encrypt(input)
+	result, err := p.svc.Encrypt(ctx, input)
 	if err != nil {
 		select {
 		case p.healthCheck.healthCheckErrc <- err:
 		default:
 		}
-		zap.L().Error("request to encrypt failed", zap.String("error-type", kmsplugin.ParseError(err).String()), zap.Error(err))
-		failLabel := kmsplugin.GetStatusLabel(err)
+		errorType := kmsplugin.ParseError(err).String()
+		zap.L().Error("request to encrypt failed", zap.String("error-type", errorType), zap.Error(err))
+		failLabel := kmsplugin.GetStatusLabel(err, errorType)
 		kmsLatencyMetric.WithLabelValues(p.keyID, failLabel, kmsplugin.OperationEncrypt, GRPC_V2).Observe(kmsplugin.GetMillisecondsSince(startTime))
 		kmsOperationCounter.WithLabelValues(p.keyID, failLabel, kmsplugin.OperationEncrypt, GRPC_V2).Inc()
 		return nil, fmt.Errorf("failed to encrypt %w", err)
@@ -165,6 +182,10 @@ func (p *V2Plugin) Decrypt(ctx context.Context, request *pb.DecryptRequest) (*pb
 	zap.L().Debug("starting decrypt operation")
 
 	startTime := time.Now()
+
+	if len(request.Ciphertext) == 0 {
+		return nil, errors.New("invalid empty ciphertext")
+	}
 	storageVersion := kmsplugin.KMSStorageVersion(request.Ciphertext[0])
 	switch storageVersion {
 	case kmsplugin.KMSStorageVersionV2:
@@ -181,14 +202,17 @@ func (p *V2Plugin) Decrypt(ctx context.Context, request *pb.DecryptRequest) (*pb
 		input.EncryptionContext = p.encryptionCtx
 	}
 
-	result, err := p.svc.Decrypt(input)
+	result, err := p.svc.Decrypt(ctx, input)
 	if err != nil {
-		select {
-		case p.healthCheck.healthCheckErrc <- err:
-		default:
+		errorType := kmsplugin.ParseError(err).String()
+		if errorType != kmsplugin.KMSErrorTypeCorruption.String() {
+			select {
+			case p.healthCheck.healthCheckErrc <- err:
+			default:
+			}
 		}
-		zap.L().Error("request to decrypt failed", zap.String("error-type", kmsplugin.ParseError(err).String()), zap.Error(err))
-		failLabel := kmsplugin.GetStatusLabel(err)
+		zap.L().Error("request to decrypt failed", zap.String("error-type", errorType), zap.Error(err))
+		failLabel := kmsplugin.GetStatusLabel(err, errorType)
 		kmsLatencyMetric.WithLabelValues(p.keyID, failLabel, kmsplugin.OperationDecrypt, GRPC_V2).Observe(kmsplugin.GetMillisecondsSince(startTime))
 		kmsOperationCounter.WithLabelValues(p.keyID, failLabel, kmsplugin.OperationDecrypt, GRPC_V2).Inc()
 		return nil, fmt.Errorf("failed to decrypt %w", err)
