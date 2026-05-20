@@ -1,3 +1,20 @@
+reviewers:
+  - bryan-cox
+  - clebs
+  - csrwng
+  - devguyio
+  - enxebre
+  - jparrill
+  - muraee
+  - Nirshal
+  - sdminonne
+  - sjenning
 approvers:
-  - admins
-  - maintainers
+  - bryan-cox
+  - csrwng
+  - devguyio
+  - enxebre
+  - jparrill
+  - muraee
+  - sjenning
+component: hypershift
