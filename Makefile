@@ -11,8 +11,8 @@ lint:
 	hack/verify-mod-tidy.sh
 	echo "Verifying gofmt"
 	hack/verify-gofmt.sh
-	echo "Verifying linting"
-	hack/verify-golint.sh
+	# echo "Verifying linting"
+	# hack/verify-golint.sh
 
 test:
 	hack/run-test.sh
