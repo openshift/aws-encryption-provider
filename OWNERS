@@ -1,3 +1,9 @@
+reviewers:
+  - csrwng
+  - sjenning
+  - enxebre
 approvers:
-  - admins
-  - maintainers
+  - csrwng
+  - sjenning
+  - enxebre
+component: hypershift
