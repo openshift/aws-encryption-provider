@@ -22,8 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/kms"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
+	smithy "github.com/aws/smithy-go"
 	"go.uber.org/zap"
 	pb "k8s.io/kms/apis/v1beta1"
 	"sigs.k8s.io/aws-encryption-provider/pkg/cloud"
@@ -67,19 +68,23 @@ func TestEncrypt(t *testing.T) {
 			checkErr:  true,
 		},
 		{
-			input:     plainMessage,
-			ctx:       nil,
-			output:    "",
-			err:       awserr.New("RequestLimitExceeded", "test", errors.New("fail")),
+			input:  plainMessage,
+			ctx:    nil,
+			output: "",
+			err: &smithy.GenericAPIError{
+				Code:    "RequestLimitExceeded",
+				Message: "test",
+				Fault:   0,
+			},
 			errType:   kmsplugin.KMSErrorTypeThrottled,
 			healthErr: true,
-			checkErr:  true,
+			checkErr:  false,
 		},
 		{
 			input:     plainMessage,
 			ctx:       nil,
 			output:    "",
-			err:       awserr.New(kms.ErrCodeInternalException, "test", errors.New("fail")),
+			err:       &kmstypes.KMSInternalException{Message: aws.String("test")},
 			errType:   kmsplugin.KMSErrorTypeOther,
 			healthErr: true,
 			checkErr:  true,
@@ -88,25 +93,46 @@ func TestEncrypt(t *testing.T) {
 			input:     plainMessage,
 			ctx:       nil,
 			output:    "",
-			err:       awserr.New(kms.ErrCodeLimitExceededException, "test", errors.New("fail")),
+			err:       &kmstypes.LimitExceededException{Message: aws.String("test")},
 			errType:   kmsplugin.KMSErrorTypeThrottled,
 			healthErr: true,
-			checkErr:  true,
+			checkErr:  false,
 		},
 		{
-			input:     plainMessage,
-			ctx:       nil,
-			output:    "",
-			err:       awserr.New("AccessDeniedException", "The ciphertext refers to a customer master key that does not exist, does not exist in this region, or you are not allowed to access", errors.New("fail")),
+			input:  plainMessage,
+			ctx:    nil,
+			output: "",
+			err: &smithy.GenericAPIError{
+				Code:    "AccessDeniedException",
+				Message: "The ciphertext refers to a customer master key that does not exist, does not exist in this region, or you are not allowed to access",
+				Fault:   0,
+			},
 			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
 		},
 		{
-			input:     plainMessage,
-			ctx:       nil,
-			output:    "",
-			err:       awserr.New("AccessDeniedException", "Some other error message", errors.New("fail")),
+			input:  plainMessage,
+			ctx:    nil,
+			output: "",
+			err: &smithy.GenericAPIError{
+				Code:    "AccessDeniedException",
+				Message: "User dummy is not authorized to perform: kms:Decrypt on this resource with an explicit deny in a resource control policy",
+				Fault:   0,
+			},
+			errType:   kmsplugin.KMSErrorTypeUserInduced,
+			healthErr: true,
+			checkErr:  false,
+		},
+		{
+			input:  plainMessage,
+			ctx:    nil,
+			output: "",
+			err: &smithy.GenericAPIError{
+				Code:    "AccessDeniedException",
+				Message: "Some other error message",
+				Fault:   0,
+			},
 			errType:   kmsplugin.KMSErrorTypeOther,
 			healthErr: true,
 			checkErr:  true,
@@ -115,7 +141,7 @@ func TestEncrypt(t *testing.T) {
 			input:     plainMessage,
 			ctx:       nil,
 			output:    "",
-			err:       awserr.New(kms.ErrCodeDisabledException, "test", errors.New("fail")),
+			err:       &kmstypes.DisabledException{Message: aws.String("test")},
 			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
@@ -124,7 +150,7 @@ func TestEncrypt(t *testing.T) {
 			input:     plainMessage,
 			ctx:       nil,
 			output:    "",
-			err:       awserr.New(kms.ErrCodeInvalidStateException, "test", errors.New("fail")),
+			err:       &kmstypes.KMSInvalidStateException{Message: aws.String("test")},
 			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
@@ -133,7 +159,7 @@ func TestEncrypt(t *testing.T) {
 			input:     plainMessage,
 			ctx:       nil,
 			output:    "",
-			err:       awserr.New(kms.ErrCodeInvalidGrantIdException, "test", errors.New("fail")),
+			err:       &kmstypes.InvalidGrantIdException{Message: aws.String("test")},
 			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
@@ -142,7 +168,7 @@ func TestEncrypt(t *testing.T) {
 			input:     plainMessage,
 			ctx:       nil,
 			output:    "",
-			err:       awserr.New(kms.ErrCodeInvalidGrantTokenException, "test", errors.New("fail")),
+			err:       &kmstypes.InvalidGrantTokenException{Message: aws.String("test")},
 			errType:   kmsplugin.KMSErrorTypeUserInduced,
 			healthErr: true,
 			checkErr:  false,
@@ -349,6 +375,7 @@ func TestHealthManyRequests(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		errc := make(chan error)
 		go func() {
+
 			_, err := p.Encrypt(
 				context.Background(),
 				&pb.EncryptRequest{Plain: []byte("foo")},
@@ -363,5 +390,74 @@ func TestHealthManyRequests(t *testing.T) {
 				t.Fatalf("#%d: unexpected errro %v", i, err)
 			}
 		}
+	}
+}
+
+func TestHealthTimeout(t *testing.T) {
+	zap.ReplaceGlobals(zap.NewExample())
+
+	c := &cloud.KMSMock{}
+	c.SetEncryptResp("foo", nil)
+	c.SetEncryptDelay(6 * time.Second) // longer than 5s timeout
+
+	sharedHealthCheck := NewSharedHealthCheck(DefaultHealthCheckPeriod, DefaultErrcBufSize)
+	go sharedHealthCheck.Start()
+	defer sharedHealthCheck.Stop()
+
+	p := New(key, c, nil, sharedHealthCheck)
+
+	err := p.Health()
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("expected deadline exceeded error, got: %v", err)
+	}
+}
+
+func TestDecryptEmptyCipher(t *testing.T) {
+	zap.ReplaceGlobals(zap.NewExample())
+
+	c := &cloud.KMSMock{}
+	ctx := context.Background()
+
+	sharedHealthCheck := NewSharedHealthCheck(DefaultHealthCheckPeriod, DefaultErrcBufSize)
+	go sharedHealthCheck.Start()
+	defer sharedHealthCheck.Stop()
+
+	p := New(key, c, nil, sharedHealthCheck)
+
+	dReq := &pb.DecryptRequest{Cipher: []byte{}}
+	_, err := p.Decrypt(ctx, dReq)
+
+	if err == nil {
+		t.Fatal("expected error for empty ciphertext, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid empty ciphertext") {
+		t.Fatalf("expected 'invalid empty ciphertext' error, got: %v", err)
+	}
+}
+
+func TestDecryptNilCipher(t *testing.T) {
+	zap.ReplaceGlobals(zap.NewExample())
+
+	c := &cloud.KMSMock{}
+	ctx := context.Background()
+
+	sharedHealthCheck := NewSharedHealthCheck(DefaultHealthCheckPeriod, DefaultErrcBufSize)
+	go sharedHealthCheck.Start()
+	defer sharedHealthCheck.Stop()
+
+	p := New(key, c, nil, sharedHealthCheck)
+
+	dReq := &pb.DecryptRequest{Cipher: nil}
+	_, err := p.Decrypt(ctx, dReq)
+
+	if err == nil {
+		t.Fatal("expected error for nil ciphertext, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid empty ciphertext") {
+		t.Fatalf("expected 'invalid empty ciphertext' error, got: %v", err)
 	}
 }
