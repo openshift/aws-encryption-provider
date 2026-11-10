@@ -1,20 +1,3 @@
-reviewers:
-  - bryan-cox
-  - clebs
-  - csrwng
-  - devguyio
-  - enxebre
-  - jparrill
-  - muraee
-  - Nirshal
-  - sdminonne
-  - sjenning
 approvers:
-  - bryan-cox
-  - csrwng
-  - devguyio
-  - enxebre
-  - jparrill
-  - muraee
-  - sjenning
-component: hypershift
+  - admins
+  - maintainers

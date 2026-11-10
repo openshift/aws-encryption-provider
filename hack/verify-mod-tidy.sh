@@ -6,4 +6,4 @@ source hack/setup-go.sh
 go version
 
 go mod tidy
-git diff --exit-code
+git diff --no-patch --exit-code
